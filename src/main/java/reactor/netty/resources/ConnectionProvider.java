@@ -274,6 +274,7 @@ public interface ConnectionProvider extends Disposable {
 		Duration maxLifeTime;
 		boolean  metricsEnabled;
 		String   leasingStrategy        = DEFAULT_POOL_LEASING_STRATEGY;
+		PooledConnectionProvider.MeterRegistrar registrar;
 
 		/**
 		 * Returns {@link ConnectionPoolSpec} new instance with default properties.
@@ -372,10 +373,33 @@ public interface ConnectionProvider extends Disposable {
 		 * </pre>
 		 * <p>By default this is not enabled.
 		 *
+		 * If enabled, this method is providing a {@link DefaultPooledConnectionProviderMeterRegistrar} to define which meters are going to be collected.
+		 *
 		 * @param metricsEnabled true enables metrics collection; false disables it
 		 * @return {@literal this}
 		 */
 		public final SPEC metrics(boolean metricsEnabled) {
+			return this.metrics(metricsEnabled, new DefaultPooledConnectionProviderMeterRegistrar());
+		}
+
+		/**
+		 * Whether to enable metrics to be collected and registered in Micrometer's
+		 * {@link io.micrometer.core.instrument.Metrics#globalRegistry globalRegistry}
+		 * under the name {@link reactor.netty.Metrics#CONNECTION_PROVIDER_PREFIX}. Applications can
+		 * separately register their own
+		 * {@link io.micrometer.core.instrument.config.MeterFilter filters} associated with this name.
+		 * For example, to put an upper bound on the number of tags produced:
+		 * <pre class="code">
+		 * MeterFilter filter = ... ;
+		 * Metrics.globalRegistry.config().meterFilter(MeterFilter.maximumAllowableTags(CONNECTION_PROVIDER_PREFIX, 100, filter));
+		 * </pre>
+		 * <p>By default this is not enabled.
+		 *
+		 * @param metricsEnabled true enables metrics collection; false disables it
+		 * @param registrar the registrar used to define what meters are going to be collected.
+		 * @return {@literal this}
+		 */
+		public final SPEC metrics(boolean metricsEnabled, PooledConnectionProvider.MeterRegistrar registrar) {
 			if (metricsEnabled) {
 				if (!Metrics.isInstrumentationAvailable()) {
 					throw new UnsupportedOperationException(
@@ -384,6 +408,7 @@ public interface ConnectionProvider extends Disposable {
 				}
 			}
 			this.metricsEnabled = metricsEnabled;
+			this.registrar = registrar;
 			return get();
 		}
 

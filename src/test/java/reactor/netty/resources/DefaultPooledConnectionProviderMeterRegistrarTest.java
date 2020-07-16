@@ -49,7 +49,7 @@ import static reactor.netty.Metrics.TOTAL_CONNECTIONS;
 /**
  * @author Violeta Georgieva
  */
-public class PooledConnectionProviderMetricsTest {
+public class DefaultPooledConnectionProviderMeterRegistrarTest {
 	private MeterRegistry registry;
 
 	@Before

@@ -42,7 +42,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -66,10 +65,12 @@ public abstract class PooledConnectionProvider<T extends Connection> implements 
 
 	final ConcurrentMap<PoolKey, InstrumentedPool<T>> channelPools = PlatformDependent.newConcurrentHashMap();
 	final String name;
+	final MeterRegistrar registrar;
 
 	protected PooledConnectionProvider(Builder builder) {
 		this.name = builder.name;
 		this.defaultPoolFactory = new PoolFactory<>(builder);
+		this.registrar = builder.registrar;
 	}
 
 	@Override
@@ -91,8 +92,8 @@ public abstract class PooledConnectionProvider<T extends Connection> implements 
 
 				InstrumentedPool<T> newPool = createPool(config, poolFactory, remoteAddress, resolverGroup);
 
-				if (poolFactory.metricsEnabled || config.metricsRecorder() != null) {
-					PooledConnectionProviderMetrics.registerMetrics(name,
+				if (poolFactory.metricsEnabled) {
+					registrar.registerMetrics(name,
 							poolKey.hashCode() + "",
 							Metrics.formatSocketAddress(remoteAddress),
 							newPool.metrics());
@@ -268,5 +269,17 @@ public abstract class PooledConnectionProvider<T extends Connection> implements 
 		public int hashCode() {
 			return Objects.hash(fqdn, holder, pipelineKey);
 		}
+	}
+
+
+	/**
+	 * A strategy to register which {@link io.micrometer.core.instrument.Meter} are collected by the {@link PooledConnectionProvider}.
+	 *
+	 * Default implementation of this interface is {@link DefaultPooledConnectionProviderMeterRegistrar}
+	 */
+	public static interface MeterRegistrar {
+
+		void registerMetrics(String poolName, String id, String remoteAddress, InstrumentedPool.PoolMetrics metrics);
+
 	}
 }
