@@ -31,11 +31,16 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
@@ -77,8 +82,9 @@ import reactor.test.StepVerifier;
 
 import javax.net.ssl.SSLException;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.assertNotNull;
+import static org.assertj.core.api.Assertions.*;
+import static org.junit.Assert.*;
+import static reactor.netty.Metrics.*;
 
 public class DefaultPooledConnectionProviderTest {
 
@@ -233,6 +239,84 @@ public class DefaultPooledConnectionProviderTest {
 			assertNotNull(sf);
 			assertThat(sf.get()).isNull();
 		}
+	}
+
+
+	@Test
+	public void testDefaultProviderMetrics() throws Exception {
+		MeterRegistry registry = new SimpleMeterRegistry();
+		Metrics.addRegistry(registry);
+
+		DisposableServer server =
+				HttpServer.create()
+						.port(0)
+						.handle((req, res) -> res.header("Connection", "close")
+								.sendString(Mono.just("test")))
+						.bindNow();
+
+		AtomicBoolean metrics = new AtomicBoolean(false);
+
+		CountDownLatch latch = new CountDownLatch(1);
+
+		DefaultPooledConnectionProvider fixed = (DefaultPooledConnectionProvider) ConnectionProvider.builder("test").maxConnections(1).metrics(true).lifo().build();
+		AtomicReference<String[]> tags = new AtomicReference<>();
+
+		HttpClient.create(fixed)
+				.port(server.port())
+				.doOnResponse((res, conn) -> {
+					conn.channel()
+							.closeFuture()
+							.addListener(f -> latch.countDown());
+
+					PooledConnectionProvider.PoolKey key = (PooledConnectionProvider.PoolKey) fixed.channelPools.keySet().toArray()[0];
+					InetSocketAddress sa = (InetSocketAddress) conn.channel().remoteAddress();
+					String[] tagsArr = new String[]{ID, key.hashCode() + "", REMOTE_ADDRESS, sa.getHostString() + ":" + sa.getPort(), NAME, "test"};
+					tags.set(tagsArr);
+
+					double totalConnections = getGaugeValue(registry,CONNECTION_PROVIDER_PREFIX + TOTAL_CONNECTIONS, tagsArr);
+					double activeConnections = getGaugeValue(registry,CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, tagsArr);
+					double idleConnections = getGaugeValue(registry, CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, tagsArr);
+					double pendingConnections = getGaugeValue(registry,CONNECTION_PROVIDER_PREFIX + PENDING_CONNECTIONS, tagsArr);
+
+					if (totalConnections == 1 && activeConnections == 1 &&
+							idleConnections == 0 && pendingConnections == 0) {
+						metrics.set(true);
+					}
+				})
+				.get()
+				.uri("/")
+				.responseContent()
+				.aggregate()
+				.asString()
+				.block(Duration.ofSeconds(30));
+
+		assertTrue(latch.await(30, TimeUnit.SECONDS));
+		assertTrue(metrics.get());
+		String[] tagsArr = tags.get();
+		assertNotNull(tagsArr);
+		assertEquals(0, getGaugeValue(registry, CONNECTION_PROVIDER_PREFIX + TOTAL_CONNECTIONS, tagsArr), 0.0);
+		assertEquals(0, getGaugeValue(registry, CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, tagsArr), 0.0);
+		assertEquals(0, getGaugeValue(registry, CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, tagsArr), 0.0);
+		assertEquals(0, getGaugeValue(registry, CONNECTION_PROVIDER_PREFIX + PENDING_CONNECTIONS, tagsArr), 0.0);
+
+		fixed.disposeLater()
+				.block(Duration.ofSeconds(30));
+
+		server.disposeNow();
+
+		Metrics.removeRegistry(registry);
+		registry.clear();
+		registry.close();
+	}
+
+
+	private double getGaugeValue(MeterRegistry registry, String name, String[] tags) {
+		Gauge gauge = registry.find(name).tags(tags).gauge();
+		double result = -1;
+		if (gauge != null) {
+			result = gauge.value();
+		}
+		return result;
 	}
 
 	@Test
